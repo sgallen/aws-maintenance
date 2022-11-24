@@ -246,11 +246,12 @@ def remove_old_snapshots(instance_name, is_aurora, snapshot_count):
 
 def lambda_handler(event, context):
     account_id = context.invoked_function_arn.split(":")[4]
-    snapshot_count = os.environ.get("SNAPSHOT_COUNT", 1)
+    snapshot_count = int(os.environ.get("SNAPSHOT_COUNT", 1))
 
     message = json.loads(event["Records"][0]["Sns"]["Message"])
     event_id = message["Event ID"].split("#")
 
     if event_id[1] in ("RDS-EVENT-0002", "RDS-EVENT-0169"):
-        copy_latest_snapshot(account_id, message["Source ID"], False)
-        remove_old_snapshots(message["Source ID"], False, snapshot_count)
+        is_aurora = event_id[1] == "RDS-EVENT-0169"
+        copy_latest_snapshot(account_id, message["Source ID"], is_aurora)
+        remove_old_snapshots(message["Source ID"], is_aurora, snapshot_count)
