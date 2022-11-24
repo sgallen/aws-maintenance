@@ -245,25 +245,9 @@ def remove_old_snapshots(instance_name, is_aurora):
 def lambda_handler(event, context):
     account_id = context.invoked_function_arn.split(":")[4]
 
-    # Scheduled event for Aurora
-    if 'source' in event and event['source'] == "aws.events":
-        clusters_to_use = os.environ.get("CLUSTERS_TO_USE", None)
-        if clusters_to_use:
-            clusters_to_use = clusters_to_use.split(",")
-        clusters = get_clusters(clusters_to_use)
+    message = json.loads(event["Records"][0]["Sns"]["Message"])
+    event_id = message["Event ID"].split("#")
 
-        if len(clusters) == 0:
-            raise Exception("No matching clusters found")
-
-        for cluster in clusters:
-            copy_latest_snapshot(account_id, cluster, True)
-            remove_old_snapshots(cluster, True)
-
-    else:  # Assume SNS about instance backup
-        message = json.loads(event["Records"][0]["Sns"]["Message"])
-
-        # Check that event reports backup has finished
-        event_id = message["Event ID"].split("#")
-        if event_id[1] == "RDS-EVENT-0002":
-            copy_latest_snapshot(account_id, message["Source ID"], False)
-            remove_old_snapshots(message["Source ID"], False)
+    if event_id[1] in ("RDS-EVENT-0002", "RDS-EVENT-0169"):
+        copy_latest_snapshot(account_id, message["Source ID"], False)
+        remove_old_snapshots(message["Source ID"], False)
