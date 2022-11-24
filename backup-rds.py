@@ -191,11 +191,13 @@ def copy_latest_snapshot(account_id, instance_name, is_aurora):
             raise e
 
 
-def remove_old_snapshots(instance_name, is_aurora):
+def remove_old_snapshots(instance_name, is_aurora, snapshot_count):
     """
-    Finds previously-copied snapshots for given RDS instance / Aurora cluster in target regions and leaves only latest one.
+    Finds previously-copied snapshots for given RDS instance / Aurora cluster in target regions
+    and leaves a specified number of the most recent snapshots.
     :param instance_name: string Name of the instance/cluster
     :param is_aurora: bool True if instance_name is name of Aurora cluster, False otherwise
+    :param snapshot_count: int Number of trailing snapshots to retain
     :return: None
     :raises Exception if instance/cluster has no snapshots in target region
     """
@@ -222,9 +224,9 @@ def remove_old_snapshots(instance_name, is_aurora):
     snapshots = get_snapshots_list(response, is_aurora)
 
     # Sort snapshots by time and get all other than the latest one
-    if len(snapshots) > 1:
+    if len(snapshots) > snapshot_count:
         sorted_snapshots = sorted(snapshots.items(), key=operator.itemgetter(1), reverse=True)
-        snapshots_to_remove = [i[0] for i in sorted_snapshots[1:]]
+        snapshots_to_remove = [i[0] for i in sorted_snapshots[snapshot_count:]]
         print("Found {} snapshot(s) to remove".format(len(snapshots_to_remove)))
 
         # Remove the snapshots
@@ -244,10 +246,11 @@ def remove_old_snapshots(instance_name, is_aurora):
 
 def lambda_handler(event, context):
     account_id = context.invoked_function_arn.split(":")[4]
+    snapshot_count = os.environ.get("SNAPSHOT_COUNT", 1)
 
     message = json.loads(event["Records"][0]["Sns"]["Message"])
     event_id = message["Event ID"].split("#")
 
     if event_id[1] in ("RDS-EVENT-0002", "RDS-EVENT-0169"):
         copy_latest_snapshot(account_id, message["Source ID"], False)
-        remove_old_snapshots(message["Source ID"], False)
+        remove_old_snapshots(message["Source ID"], False, snapshot_count)

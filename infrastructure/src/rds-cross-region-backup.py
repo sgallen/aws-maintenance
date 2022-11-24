@@ -4,7 +4,7 @@ from troposphere import awslambda, iam, sns, rds, events
 
 template = Template()
 
-template.add_description('Resources copying RDS backups to another region')
+template.set_description('Resources copying RDS backups to another region')
 
 target_region_parameter = template.add_parameter(Parameter(
     "TargetRegionParameter",
@@ -12,6 +12,13 @@ target_region_parameter = template.add_parameter(Parameter(
     Description="Region where to store the copies of snapshots (for example: eu-central-1)",
     AllowedPattern="^[a-z]+-[a-z]+-[0-9]+$",
     ConstraintDescription="The target region needs to be valid AWS region, for example: us-east-1"
+))
+
+snapshot_count_parameter = template.add_parameter(Parameter(
+    "SnapshotCountParameter",
+    Type="Number",
+    Default=1,
+    Description="Number of latest backup snapshots to retain",
 ))
 
 databases_to_use_parameter = template.add_parameter(Parameter(
@@ -59,7 +66,7 @@ template.add_condition("UseAllDatabases", Equals(Join("", Ref(databases_to_use_p
 template.add_condition("UseEncryption", Equals(Ref(kms_key_parameter), ""), )
 template.add_condition("IncludeAurora", Equals(Ref(include_aurora_clusters_parameter), "Yes"))
 
-template.add_metadata({
+template.set_metadata({
     "AWS::CloudFormation::Interface": {
         "ParameterGroups": [
             {
@@ -70,6 +77,7 @@ template.add_metadata({
                     "TargetRegionParameter",
                     "S3BucketParameter",
                     "SourceZipParameter",
+                    "SnapshotCountParameter",
                 ]
             },
             {
@@ -101,6 +109,7 @@ template.add_metadata({
         "ParameterLabels": {
             "TargetRegionParameter": {"default": "Target region"},
             "DatabasesToUse": {"default": "Databases to use for"},
+            "SnapshotCount": {"default": "Number of snapshots to keep"},
             "KMSKeyParameter": {"default": "KMS Key in target region"},
             "IncludeAuroraClusters": {"default": "Use for Aurora clusters"},
             "ClustersToUse": {"default": "Aurora clusters to use for"},
@@ -150,17 +159,28 @@ backup_rds_role = template.add_resource(iam.Role(
                 ],
                 Resource=['arn:aws:logs:*:*:*']
             ),
-            If(
-                "UseEncryption",
-                Ref(AWS_NO_VALUE),
-                aws.Statement(
-                    Effect=aws.Allow,
-                    Action=[
-                        aws.Action('kms', 'Create*'),  # Don't ask me why this is needed...
-                        aws.Action('kms', 'DescribeKey'),
-                    ],
-                    Resource=[Ref(kms_key_parameter)]
-                ),
+            # FIX:
+            # This stanza leads to the error: TypeError: Statement is <class 'troposphere.If'>, expected [<class 'awacs.aws.Statement'>]
+            # Seems to be related to a post by the original author here: https://github.com/cloudtools/troposphere/issues/668
+            # If(
+            #     "UseEncryption",
+            #     Ref(AWS_NO_VALUE),
+            #     aws.Statement(
+            #         Effect=aws.Allow,
+            #         Action=[
+            #             aws.Action('kms', 'Create*'),  # Don't ask me why this is needed...
+            #             aws.Action('kms', 'DescribeKey'),
+            #         ],
+            #         Resource=[Ref(kms_key_parameter)]
+            #     ),
+            # ),
+            aws.Statement(
+                Effect=aws.Allow,
+                Action=[
+                    aws.Action('kms', 'Create*'),  # Don't ask me why this is needed...
+                    aws.Action('kms', 'DescribeKey'),
+                ],
+                Resource=[Ref(kms_key_parameter)]
             ),
         ])
     )]
@@ -176,14 +196,15 @@ backup_rds_function = template.add_resource(awslambda.Function(
     Handler='backup-rds.lambda_handler',
     MemorySize=128,
     Role=GetAtt(backup_rds_role, 'Arn'),
-    Runtime='python3.6',
+    Runtime='python3.9',
     Timeout=30,
     Environment=awslambda.Environment(
         Variables={
             'SOURCE_REGION': Ref(AWS_REGION),
             'TARGET_REGION': Ref(target_region_parameter),
             'KMS_KEY_ID': Ref(kms_key_parameter),
-            'CLUSTERS_TO_USE': Ref(clusters_to_use_parameter)
+            'CLUSTERS_TO_USE': Ref(clusters_to_use_parameter),
+            'SNAPSHOT_COUNT': Ref(snapshot_count_parameter)
         }
     )
 ))
@@ -216,28 +237,28 @@ template.add_resource(awslambda.Permission(
     SourceArn=Ref(rds_topic)
 ))
 
-schedule_event = template.add_resource(events.Rule(
-    "AuroraBackupEvent",
-    Condition="IncludeAurora",
-    Description="Copy Aurora clusters to another region",
-    ScheduleExpression="rate(1 day)",
-    State="ENABLED",
-    Targets=[
-        events.Target(
-            Arn=GetAtt(backup_rds_function, "Arn"),
-            Id="backup_rds_function"
-        )
-    ]
-))
+# schedule_event = template.add_resource(events.Rule(
+#     "AuroraBackupEvent",
+#     Condition="IncludeAurora",
+#     Description="Copy Aurora clusters to another region",
+#     ScheduleExpression="rate(1 day)",
+#     State="ENABLED",
+#     Targets=[
+#         events.Target(
+#             Arn=GetAtt(backup_rds_function, "Arn"),
+#             Id="backup_rds_function"
+#         )
+#     ]
+# ))
 
-# Permission for CloudWatch Events to trigger the Lambda
-template.add_resource(awslambda.Permission(
-    "EventsPermissionForLambda",
-    Condition="IncludeAurora",
-    Action="lambda:invokeFunction",
-    FunctionName=Ref(backup_rds_function),
-    Principal="events.amazonaws.com",
-    SourceArn=GetAtt(schedule_event, "Arn")
-))
+# # Permission for CloudWatch Events to trigger the Lambda
+# template.add_resource(awslambda.Permission(
+#     "EventsPermissionForLambda",
+#     Condition="IncludeAurora",
+#     Action="lambda:invokeFunction",
+#     FunctionName=Ref(backup_rds_function),
+#     Principal="events.amazonaws.com",
+#     SourceArn=GetAtt(schedule_event, "Arn")
+# ))
 
 print(template.to_json())
