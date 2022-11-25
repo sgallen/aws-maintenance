@@ -228,6 +228,14 @@ template.add_resource(rds.EventSubscription(
     SourceIds=If("UseAllDatabases", Ref(AWS_NO_VALUE), Ref(databases_to_use_parameter))
 ))
 
+template.add_resource(rds.EventSubscription(
+    "RDSClusterSnapshotBackupEvent",
+    Enabled=True,
+    EventCategories=["backup"],
+    SourceType="db-cluster-snapshot",
+    SnsTopicArn=Ref(rds_topic)
+))
+
 # Permission for SNS to trigger the Lambda
 template.add_resource(awslambda.Permission(
     "SNSPermissionForLambda",

@@ -294,6 +294,19 @@
    },
    "Type": "AWS::SNS::Topic"
   },
+  "RDSClusterSnapshotBackupEvent": {
+   "Properties": {
+    "Enabled": true,
+    "EventCategories": [
+     "backup"
+    ],
+    "SnsTopicArn": {
+     "Ref": "RDSBackupTopic"
+    },
+    "SourceType": "db-cluster-snapshot"
+   },
+   "Type": "AWS::RDS::EventSubscription"
+  },
   "SNSPermissionForLambda": {
    "Properties": {
     "Action": "lambda:invokeFunction",

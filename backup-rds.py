@@ -90,21 +90,6 @@ def print_encryption_info(source_snapshot_arn, is_aurora):
         print("Snapshot is not encrypted, but KMS key specified - copy WILL BE encrypted")
 
 
-def get_clusters(clusters_to_use):
-    """
-    Gets a list of Aurora clusters and matches that against CLUSTERS_TO_USE env variable (if provided).
-    :param clusters_to_use: List of cluster names
-    :return: List of Aurora cluster names that match CLUSTERS_TO_USE (or all, if CLUSTERS_TO_USE is empty)
-    """
-    clusters = []
-    clusters_list = SOURCE_CLIENT.describe_db_clusters()
-    for cluster in clusters_list['DBClusters']:
-        if (clusters_to_use and cluster['DBClusterIdentifier'] in clusters_to_use) or (not clusters_to_use):
-            clusters.append(cluster['DBClusterIdentifier'])
-
-    return clusters
-
-
 def copy_latest_snapshot(account_id, instance_name, is_aurora):
     """
     Finds the latest snapshot for a given RDS instance/Aurora Cluster and copies it to target region.
@@ -244,14 +229,37 @@ def remove_old_snapshots(instance_name, is_aurora, snapshot_count):
         print("No old snapshots to remove in target region")
 
 
+def get_cluster_identifier(cluster_snapshot_identifier):
+    response = SOURCE_CLIENT.describe_db_cluster_snapshots(
+        DBClusterSnapshotIdentifier=cluster_snapshot_identifier
+    )
+    db_cluster_snapshots = response['DBClusterSnapshots']
+
+    if not db_cluster_snapshots:
+        return None
+
+    return db_cluster_snapshots[0]['DBClusterIdentifier']
+
+
 def lambda_handler(event, context):
     account_id = context.invoked_function_arn.split(":")[4]
     snapshot_count = int(os.environ.get("SNAPSHOT_COUNT", 1))
+    clusters_to_use = os.environ.get("CLUSTERS_TO_USE", None)
+
+    if clusters_to_use:
+        clusters_to_use = clusters_to_use.split(",")
 
     message = json.loads(event["Records"][0]["Sns"]["Message"])
+    source_id = message["Source ID"]
     event_id = message["Event ID"].split("#")
 
-    if event_id[1] in ("RDS-EVENT-0002", "RDS-EVENT-0169"):
-        is_aurora = event_id[1] == "RDS-EVENT-0169"
-        copy_latest_snapshot(account_id, message["Source ID"], is_aurora)
-        remove_old_snapshots(message["Source ID"], is_aurora, snapshot_count)
+    if event_id[1] == "RDS-EVENT-0002":
+        copy_latest_snapshot(account_id, source_id, False)
+        remove_old_snapshots(source_id, False, snapshot_count)
+    elif event_id[1] == "RDS-EVENT-0169":
+        # Is this a snapshot we're interested in?
+        cluster_identifier = get_cluster_identifier(source_id)
+        if cluster_identifier not in clusters_to_use:
+            return
+        copy_latest_snapshot(account_id, cluster_identifier, True)
+        remove_old_snapshots(cluster_identifier, True, snapshot_count)
